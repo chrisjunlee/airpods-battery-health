@@ -66,6 +66,7 @@ MODEL_DB = {
     0x200E: ("AirPods Pro 1",         "A2084", "airpodsPro1"),
     0x2014: ("AirPods Pro 2",         "A2699", "airpodsPro2"),  # Lightning case
     0x2024: ("AirPods Pro 2",         "A3047", "airpodsPro2"),  # USB-C case
+    0x2027: ("AirPods Pro 3",         "A3064", "airpodsPro3"), 
     0x200A: ("AirPods Max 1",         "A2096", "airpodsMax1"),  # Lightning
     0x201F: ("AirPods Max 2",         "A3106", "airpodsMax2"),  # USB-C
 }
