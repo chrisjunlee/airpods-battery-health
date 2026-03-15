@@ -276,7 +276,7 @@ HELP_TEXT = f"""
   python3 airpods_health_test.py
 
   # Pre-fill serial, sample every 2 min, stop at 15%
-  python3 airpods_health_test.py --serial DD609JF2M7 --interval 2 --cutoff-percent 15
+  python3 airpods_health_test.py --serial DD609JF2M7 --interval 2 --cutoff-percent 35
 
   # Save to specific folder, custom volume
   python3 airpods_health_test.py --output-dir ~/AirPodsTests --volume 40
@@ -307,9 +307,9 @@ def parse_args():
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--serial",         default="")
-    parser.add_argument("--interval",       type=int, default=5)
+    parser.add_argument("--interval",       type=int, default=2)
     parser.add_argument("--output-dir",     dest="output_dir", default=".")
-    parser.add_argument("--cutoff-percent", dest="cutoff_percent", type=int, default=10)
+    parser.add_argument("--cutoff-percent", dest="cutoff_percent", type=int, default=35)
     parser.add_argument("--volume",         type=int, default=50)
     parser.add_argument("--skip-ear-detection", dest="skip_ear_detection", action="store_true", default=False)
     parser.add_argument("--debug",              action="store_true", default=False)
@@ -354,7 +354,7 @@ def main():
     os.system("clear")
     print(f"{C.BOLD}{C.CYAN}")
     print("╔══════════════════════════════════════════════════════╗")
-    print("║          AirPods Battery Health Test  v4            ║")
+    print("║          AirPods Battery Health Test  v1.2            ║")
     print(f"╚══════════════════════════════════════════════════════╝{C.RESET}")
     print(f"  Interval: {C.BOLD}{args.interval} min{C.RESET}  |  "
           f"Cutoff: {C.BOLD}{stop_threshold}%{C.RESET}  |  "
