@@ -13,7 +13,7 @@ USAGE:
 REQUIREMENTS:
   - macOS (Ventura / Sonoma / Sequoia / Tahoe)
   - brew install switchaudio-osx   (device detection)
-  - brew install sox               (pink noise; falls back to system tone)
+  - brew install sox               (pink noise, required)
   - AirPods connected as audio output before running
 """
 
@@ -56,24 +56,26 @@ def _ts():          return datetime.now().strftime("%H:%M:%S")
 # Key: product_id integer (from system_profiler JSON device_productID)
 # Value: (model_name, model_number, camel_name)
 # Sources: Apple support, ChatGPT cross-reference, github.com/maniacx/Bluetooth-Battery-Meter/issues/65
-# Format: (display_name, apple_model_number, camelCaseFilename)
+# Format: (display_name, apple_model_number, camelCaseFilename, time_to_50p)
+# time_to_50p: baseline minutes to reach 50% at 100% battery health (-1 = unknown)
 MODEL_DB = {
-    0x2002: ("AirPods 1",             "A1523", "airpods1"),
-    0x200F: ("AirPods 2",             "A2031", "airpods2"),
-    0x2013: ("AirPods 3",             "A2565", "airpods3"),
-    0x2019: ("AirPods 4",             "A3048", "airpods4"),
-    0x201B: ("AirPods 4 ANC",         "A3049", "airpods4ANC"),
-    0x200E: ("AirPods Pro 1",         "A2084", "airpodsPro1"),
-    0x2014: ("AirPods Pro 2",         "A2699", "airpodsPro2"),  # Lightning case
-    0x2024: ("AirPods Pro 2",         "A3047", "airpodsPro2"),  # USB-C case
-    0x2027: ("AirPods Pro 3",         "A3064", "airpodsPro3"), 
-    0x200A: ("AirPods Max 1",         "A2096", "airpodsMax1"),  # Lightning
-    0x201F: ("AirPods Max 2",         "A3106", "airpodsMax2"),  # USB-C
+    # Source: https://support.apple.com/en-us/109525
+    0x2002: ("AirPods 1",     "A1523", "airpods1",     -1),
+    0x200F: ("AirPods 2",     "A2031", "airpods2",     -1),
+    0x2013: ("AirPods 3",     "A2565", "airpods3",     -1),
+    0x2019: ("AirPods 4",     "A3053", "airpods4",     -1),
+    0x201B: ("AirPods 4 ANC", "A3056", "airpods4ANC",  -1),
+    0x200E: ("AirPods Pro 1", "A2084", "airpodsPro1",  -1),
+    0x2014: ("AirPods Pro 2", "A2699", "airpodsPro2",  -1),  # Lightning case
+    0x2024: ("AirPods Pro 2", "A3047", "airpodsPro2",  -1),  # USB-C case
+    0x2027: ("AirPods Pro 3", "A3063", "airpodsPro3",  400),  # USB-C case
+    0x200A: ("AirPods Max 1", "A2096", "airpodsMax1",  -1),  # Lightning
+    0x201F: ("AirPods Max 2", "A3184", "airpodsMax2",  -1),  # USB-C
 }
 
 
 def lookup_model(product_id: int):
-    """Return (model_name, model_number, camel_name) or None."""
+    """Return (model_name, model_number, camel_name, time_to_50p) or None."""
     return MODEL_DB.get(product_id)
 
 
@@ -168,7 +170,7 @@ def set_volume(level: int):
 # ── Pink noise ─────────────────────────────────────────────────────────────────
 def start_pink_noise() -> Optional[subprocess.Popen]:
     """Start pink noise playback. Returns the Popen object or None on failure."""
-    # Try sox 'play' first, then sox directly, then afplay loop fallback
+    # Try sox 'play' first, then sox directly
     for cmd in (
         ["play", "-q", "-n", "-c", "2", "synth", "pinknoise"],
         ["sox",  "-q", "-n", "-d", "-c", "2", "synth", "pinknoise"],
@@ -178,16 +180,8 @@ def start_pink_noise() -> Optional[subprocess.Popen]:
             log_ok(f"Pink noise started via {cmd[0]} (PID {proc.pid})")
             return proc
 
-    # Fallback: loop a built-in system sound to keep audio active
-    log_warn("sox not found — using fallback system tone. Install: brew install sox")
-    script = (
-        "while true; do "
-        "afplay /System/Library/Sounds/Tink.aiff -v 0.3 2>/dev/null; "
-        "sleep 0.4; done"
-    )
-    proc = subprocess.Popen(["bash", "-c", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    log_warn(f"Fallback tone loop started (PID {proc.pid})")
-    return proc
+    log_err("sox not found. Install with: brew install switchaudio-osx sox")
+    sys.exit(1)
 
 
 def stop_pink_noise(proc: Optional[subprocess.Popen]):
@@ -198,7 +192,7 @@ def stop_pink_noise(proc: Optional[subprocess.Popen]):
         except subprocess.TimeoutExpired:
             proc.kill()
     # Belt-and-suspenders: kill any stray sox/afplay processes
-    for name in ("play", "sox", "afplay"):
+    for name in ("play", "sox"):
         subprocess.run(["killall", name], capture_output=True)
 
 
@@ -295,7 +289,7 @@ HELP_TEXT = f"""
 {C.BOLD}REQUIREMENTS{C.RESET}
   - macOS Ventura / Sonoma / Sequoia / Tahoe
   - brew install switchaudio-osx   (device detection)
-  - brew install sox               (pink noise, optional)
+  - brew install sox               (pink noise, required)
   - AirPods connected as audio output before running
 """
 
@@ -313,6 +307,7 @@ def parse_args():
     parser.add_argument("--volume",         type=int, default=50)
     parser.add_argument("--skip-ear-detection", dest="skip_ear_detection", action="store_true", default=False)
     parser.add_argument("--debug",              action="store_true", default=False)
+    parser.add_argument("--demo-mode",          dest="demo_mode", action="store_true", default=False)  # hidden
     return parser.parse_args()
 
 
@@ -325,6 +320,18 @@ def main():
     target_volume  = args.volume
     output_dir     = Path(args.output_dir).expanduser().resolve()
     serial_arg     = args.serial.strip()
+    demo_mode      = args.demo_mode
+
+    def demo_path(p):   # show filename only
+        return Path(p).name if demo_mode else str(p)
+    def demo_serial(s): # mask last half with X's
+        if not demo_mode or not s: return s
+        half = len(s) // 2
+        return s[:half] + "X" * (len(s) - half)
+    def demo_bt(addr):  # mask last 3 octets
+        if not demo_mode or not addr: return addr
+        parts = addr.split(":")
+        return ":".join(parts[:3] + ["00", "00", "00"])
 
     # State for cleanup handler
     audio_proc    = None
@@ -344,7 +351,7 @@ def main():
             csv_fh.close()
         if csv_path and csv_path.exists():
             rows = sum(1 for _ in open(csv_path)) - 1  # subtract header
-            log_ok(f"Saved {rows} row(s) → {csv_path}")
+            log_ok(f"Saved {rows} row(s) → {demo_path(csv_path)}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT,  cleanup)
@@ -352,17 +359,20 @@ def main():
 
     # ── Banner ────────────────────────────────────────────────────────────────
     os.system("clear")
-    print(f"{C.BOLD}{C.CYAN}")
-    print("╔══════════════════════════════════════════════════════╗")
-    print("║          AirPods Battery Health Test  v1.2            ║")
-    print(f"╚══════════════════════════════════════════════════════╝{C.RESET}")
+    print(f"{C.BOLD}{C.CYAN}", end="")
+    _banner_title = "AirPods Battery Health Test  v1.2"
+    _banner_pad    = 4
+    _banner_inner  = _banner_pad * 2 + len(_banner_title)
+    print("╔" + "═" * _banner_inner + "╗")
+    print("║" + " " * _banner_pad + _banner_title + " " * _banner_pad + "║")
+    print(f"╚" + "═" * _banner_inner + f"╝{C.RESET}")
     print(f"  Interval: {C.BOLD}{args.interval} min{C.RESET}  |  "
           f"Cutoff: {C.BOLD}{stop_threshold}%{C.RESET}  |  "
-          f"Volume: {C.BOLD}{target_volume}%{C.RESET}")
-    print(f"  Output: {C.BOLD}{output_dir}{C.RESET}")
+          f"Volume: {C.BOLD}{target_volume}%{C.RESET}  |  "
+          f"Output: {C.BOLD}{demo_path(output_dir)}{C.RESET}")
 
     # ── Prerequisites ─────────────────────────────────────────────────────────
-    log_head("Prerequisites")
+    log_head("Prerequisites") if not demo_mode else None
     for dep, hint in [
         ("system_profiler", "built into macOS"),
         ("osascript",       "built into macOS"),
@@ -371,11 +381,13 @@ def main():
         if not _cmd_exists(dep):
             log_err(f"{dep} not found. {hint}")
             sys.exit(1)
-    log_ok("switchaudio-osx present")
+    if not demo_mode:
+        log_ok("switchaudio-osx present")
     if not (_cmd_exists("play") or _cmd_exists("sox")):
-        log_warn("sox not found (brew install sox) — fallback tone will be used")
-    else:
-        log_ok("sox present — pink noise available")
+        log_err("sox not found. Install with: brew install sox")
+        sys.exit(1)
+    if not demo_mode:
+        log_ok("sox present — pink noise ready")
 
     # ── Detect device ─────────────────────────────────────────────────────────
     log_head("Detecting AirPods")
@@ -412,9 +424,9 @@ def main():
     serial_left  = attrs.get("device_serialNumberLeft",  "")
     serial_right = attrs.get("device_serialNumberRight", "")
 
-    log_ok(f"Detected:      {C.BOLD}{device_name}{C.RESET}  ({bt_addr})")
-    log_ok(f"Serial (case): {C.BOLD}{serial_case or 'not found'}{C.RESET}")
-    log_ok(f"Serial (L/R):  {C.BOLD}{serial_left or '?'}{C.RESET} / {C.BOLD}{serial_right or '?'}{C.RESET}")
+    log_ok(f"Detected:      {C.BOLD}{device_name}{C.RESET}  ({demo_bt(bt_addr)})")
+    log_ok(f"Serial (case): {C.BOLD}{demo_serial(serial_case) or 'not found'}{C.RESET}")
+    log_ok(f"Serial (L/R):  {C.BOLD}{demo_serial(serial_left) or '?'}{C.RESET} / {C.BOLD}{demo_serial(serial_right) or '?'}{C.RESET}")
     log_ok(f"ProductID:     {C.BOLD}{hex(product_id_int) if product_id_int else 'not found'}{C.RESET}")
 
     # ── Serial override / prompt ───────────────────────────────────────────────
@@ -430,13 +442,14 @@ def main():
     model_info = lookup_model(product_id_int) if product_id_int else None
 
     if model_info:
-        model_name, model_number, camel_name = model_info
+        model_name, model_number, camel_name, time_to_50p = model_info
         log_ok(f"{hex(product_id_int)} → {model_name} ({model_number})")
     else:
         model_name   = device_name
         # Use the raw hex product ID as model_number so the filename is meaningful
         model_number = str(product_id_raw) if product_id_raw is not None else "Unknown"
         camel_name   = infer_camel(device_name)
+        time_to_50p  = -1
         if product_id_int:
             log_warn(f"ProductID {hex(product_id_int)} not in lookup table — using device name.")
         else:
@@ -449,8 +462,8 @@ def main():
     start_time = datetime.now()
 
     print(f"  Model:   {C.BOLD}{model_name}{C.RESET}  /  {model_number}")
-    print(f"  Serial:  {C.BOLD}{serial_number}{C.RESET}")
-    print(f"  BT Addr: {bt_addr}")
+    print(f"  Serial:  {C.BOLD}{demo_serial(serial_number)}{C.RESET}")
+    print(f"  BT Addr: {demo_bt(bt_addr)}")
     print()
     print(f"  Left:  {battery_bar(left)}")
     print(f"  Right: {battery_bar(right)}")
@@ -487,8 +500,8 @@ def main():
     csv_path = output_dir / f"{camel_name}-{serial_number}.csv"
     is_append = csv_path.exists() and csv_path.stat().st_size > 0
     csv_writer, csv_fh = open_csv(csv_path)
-    log_ok(f"{'Appending to' if is_append else 'Created'}: {csv_path}")
-    print(f"\n  {C.BOLD}Output file:{C.RESET} {csv_path}")
+    log_ok(f"{'Appending to' if is_append else 'Created'}: {demo_path(csv_path)}")
+    print(f"\n  {C.BOLD}Output file:{C.RESET} {demo_path(csv_path)}")
 
     # ── Start pink noise ──────────────────────────────────────────────────────
     log_head("Starting Audio (Pink Noise)")
@@ -502,8 +515,9 @@ def main():
           f"Press {C.BOLD}Ctrl-C{C.RESET} to exit")
     print()
 
-    sample_num = 0
-    test_start = time.time()
+    sample_num     = 0
+    test_start     = time.time()
+    time_to_50_actual = None  # elapsed min when either earbud first hit 50%
 
     while True:
         now         = time.time()
@@ -542,6 +556,8 @@ def main():
 
         # Stop condition
         earbud_vals = [v for v in (left, right) if v is not None]
+        if time_to_50_actual is None and earbud_vals and min(earbud_vals) <= 50:
+            time_to_50_actual = elapsed_min
         if earbud_vals and min(earbud_vals) <= stop_threshold:
             print()
             log_warn(f"Earbud at {min(earbud_vals)}% — reached {stop_threshold}% threshold. Test complete.")
@@ -574,7 +590,6 @@ def main():
 
     print()
     print(f"{C.BOLD}{C.GREEN}══════════ Test Complete ══════════{C.RESET}")
-    print()
     print(f"  {'Start:':10} {start_time.strftime('%H:%M:%S')}   "
           f"L: {C.BOLD}{fmt_pct(initial_left)}{C.RESET}   "
           f"R: {C.BOLD}{fmt_pct(initial_right)}{C.RESET}")
@@ -582,8 +597,18 @@ def main():
           f"L: {C.BOLD}{fmt_pct(final_left)}{C.RESET}   "
           f"R: {C.BOLD}{fmt_pct(final_right)}{C.RESET}")
     print()
-    print(f"  {'Score:':10} {C.BOLD}{total_min} min{C.RESET} to reach {stop_threshold}% cutoff")
-    print(f"  {'File:':10} {csv_path}")
+    print(f"  {'Result:':10} {C.BOLD}{total_min} min{C.RESET} to reach {stop_threshold}% cutoff")
+    t50_str = f"{time_to_50_actual} min" if time_to_50_actual is not None else "not reached"
+    print(f"  {'Time 50%:':10} {C.BOLD}{t50_str}{C.RESET}")
+
+    # Battery health — uses time to 50%, not total runtime
+    if time_to_50_actual is not None and time_to_50p > 0:
+        health_pct = round((time_to_50_actual / time_to_50p) * 100)
+        print(f"  {'Health:':10} {C.BOLD}{health_pct}%{C.RESET}  ({time_to_50_actual} min / {time_to_50p} min baseline)")
+    elif time_to_50_actual is not None and time_to_50p == -1:
+        print(f"  {'Health:':10} unknown baseline for {model_name}")
+
+    print(f"  {'File:':10} {demo_path(csv_path)}")
     print()
 
     # Explicit cleanup (also handles non-signal exit)
